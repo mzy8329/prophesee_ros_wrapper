@@ -4,6 +4,7 @@
     <param name="camera_name" value="camera" />
     <param name="show_cd" value="true" />
 
+
     <!-- Time interval to display events up to the current time, in us -->
     <param name="display_accumulation_time" value="5000" />
   </node>

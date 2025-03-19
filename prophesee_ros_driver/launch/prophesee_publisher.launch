@@ -3,6 +3,8 @@
   <node pkg="prophesee_ros_driver" type="prophesee_ros_publisher" name="prophesee_ros_publisher" respawn="false" output="screen">
     <param name="camera_name" value="camera" />
     <param name="publish_cd" value="true" />
+    <param name="file_record_path" value="$(find prophesee_ros_driver)/data/"/>
+    <param name="file_name" value="test" />
 
     <!-- Path to the file with the camera settings -->
     <param name="bias_file" value=""/>

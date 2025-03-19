@@ -20,6 +20,9 @@
 
 #include <boost/date_time/posix_time/posix_time.hpp>
 
+std::string record_save_path = "";
+std::string record_name = "";
+
 PropheseeWrapperPublisher::PropheseeWrapperPublisher() :
     nh_("~"),
     biases_file_(""),
@@ -33,7 +36,7 @@ PropheseeWrapperPublisher::PropheseeWrapperPublisher() :
     nh_.getParam("raw_file_to_read", raw_file_to_read_);
     event_delta_t_ = ros::Duration(nh_.param<double>("event_delta_t", 100.0e-6));
 
-    const std::string topic_cam_info        = "/prophesee/" + camera_name_ + "/camera_info";
+    const std::string topic_cam_info = "/prophesee/" + camera_name_ + "/camera_info";
     const std::string topic_cd_event_buffer = "/prophesee/" + camera_name_ + "/cd_events_buffer";
 
     pub_info_ = nh_.advertise<sensor_msgs::CameraInfo>(topic_cam_info, 1);
@@ -47,18 +50,23 @@ PropheseeWrapperPublisher::PropheseeWrapperPublisher() :
     }
 
     // Add camera runtime error callback
-    camera_.add_runtime_error_callback([](const Metavision::CameraException &e) { ROS_WARN("%s", e.what()); });
+    camera_.add_runtime_error_callback([](const Metavision::CameraException& e) { ROS_WARN("%s", e.what()); });
 
     // Get the sensor config
     Metavision::CameraConfiguration config = camera_.get_camera_configuration();
-    auto &geometry                         = camera_.geometry();
-    ROS_INFO("[CONF] Width:%i, Height:%i", geometry.get_width(), geometry.get_height());
+    auto& geometry = camera_.geometry();
+    ROS_INFO("[CONF] Width:%i, Height:%i", geometry.width(), geometry.height());
     ROS_INFO("[CONF] Serial number: %s", config.serial_number.c_str());
 
     // Publish camera info message
-    cam_info_msg_.width           = geometry.get_width();
-    cam_info_msg_.height          = geometry.get_height();
+    cam_info_msg_.width = geometry.width();
+    cam_info_msg_.height = geometry.height();
     cam_info_msg_.header.frame_id = "PropheseeCamera_optical_frame";
+
+    nh_.getParam("file_record_path", file_record_path_);
+    nh_.getParam("file_name", file_name_);
+    start_record_srv_ = nh_.advertiseService("PropheseeWrapperPublisher/start_record_origin", &PropheseeWrapperPublisher::start_record_srv_callback, this);
+    stop_record_srv_ = nh_.advertiseService("PropheseeWrapperPublisher/stop_record_origin", &PropheseeWrapperPublisher::stop_record_srv_callback, this);
 }
 
 PropheseeWrapperPublisher::~PropheseeWrapperPublisher() {
@@ -77,22 +85,25 @@ bool PropheseeWrapperPublisher::openCamera() {
 
             if (!biases_file_.empty()) {
                 ROS_INFO("[CONF] Loading bias file: %s", biases_file_.c_str());
-                camera_.get_facility<Metavision::I_LL_Biases>().load_from_file(biases_file_);
+                // camera_.get_facility<Metavision::I_LL_Biases>().load_from_file(biases_file_);
+                camera_.biases().set_from_file(biases_file_);
             }
-        } else {
+        }
+        else {
             camera_ = Metavision::Camera::from_file(raw_file_to_read_);
             ROS_INFO("[CONF] Reading from raw file: %s", raw_file_to_read_.c_str());
         }
 
         camera_is_opened = true;
-    } catch (Metavision::CameraException &e) { ROS_WARN("%s", e.what()); }
+    }
+    catch (Metavision::CameraException& e) { ROS_WARN("%s", e.what()); }
     return camera_is_opened;
 }
 
 void PropheseeWrapperPublisher::startPublishing() {
     camera_.start();
     start_timestamp_ = ros::Time::now();
-    last_timestamp_  = start_timestamp_;
+    last_timestamp_ = start_timestamp_;
 
     if (publish_cd_)
         publishCDEvents();
@@ -112,76 +123,110 @@ void PropheseeWrapperPublisher::publishCDEvents() {
     // Initialize and publish a buffer of CD events
     try {
         Metavision::CallbackId cd_callback =
-            camera_.cd().add_callback([this](const Metavision::EventCD *ev_begin, const Metavision::EventCD *ev_end) {
-                // Check the number of subscribers to the topic
-                if (pub_cd_events_.getNumSubscribers() <= 0)
-                    return;
+            camera_.cd().add_callback([this](const Metavision::EventCD* ev_begin, const Metavision::EventCD* ev_end) {
+            // Check the number of subscribers to the topic
+            if (pub_cd_events_.getNumSubscribers() <= 0)
+                return;
 
-                if (ev_begin < ev_end) {
-                    // Compute the current local buffer size with new CD events
-                    const unsigned int buffer_size = ev_end - ev_begin;
+            if (ev_begin < ev_end) {
+                // Compute the current local buffer size with new CD events
+                const unsigned int buffer_size = ev_end - ev_begin;
 
-                    // Get the current time
-                    event_buffer_current_time_.fromNSec(start_timestamp_.toNSec() + (ev_begin->t * 1000.00));
+                // Get the current time
+                event_buffer_current_time_.fromNSec(start_timestamp_.toNSec() + (ev_begin->t * 1000.00));
 
-                    /** In case the buffer is empty we set the starting timestamp **/
-                    if (event_buffer_.empty()) {
-                        // Get starting time
-                        event_buffer_start_time_ = event_buffer_current_time_;
-                    }
-
-                    /** Insert the events to the buffer **/
-                    auto inserter = std::back_inserter(event_buffer_);
-
-                    /** When there is not activity filter **/
-                    std::copy(ev_begin, ev_end, inserter);
-
-                    /** Get the last timestamp **/
-                    event_buffer_current_time_.fromNSec(start_timestamp_.toNSec() + (ev_end - 1)->t * 1000.00);
+                /** In case the buffer is empty we set the starting timestamp **/
+                if (event_buffer_.empty()) {
+                    // Get starting time
+                    event_buffer_start_time_ = event_buffer_current_time_;
                 }
 
-                if ((event_buffer_current_time_ - event_buffer_start_time_) >= event_delta_t_) {
-                    /** Create the message **/
-                    prophesee_event_msgs::EventArray event_buffer_msg;
+                /** Insert the events to the buffer **/
+                auto inserter = std::back_inserter(event_buffer_);
 
-                    // Sensor geometry in header of the message
-                    event_buffer_msg.header.stamp = event_buffer_current_time_;
-                    event_buffer_msg.height       = camera_.geometry().get_height();
-                    event_buffer_msg.width        = camera_.geometry().get_width();
+                /** When there is not activity filter **/
+                std::copy(ev_begin, ev_end, inserter);
 
-                    /** Set the buffer size for the msg **/
-                    event_buffer_msg.events.resize(event_buffer_.size());
+                /** Get the last timestamp **/
+                event_buffer_current_time_.fromNSec(start_timestamp_.toNSec() + (ev_end - 1)->t * 1000.00);
+            }
 
-                    // Copy the events to the ros buffer format
-                    auto buffer_msg_it = event_buffer_msg.events.begin();
-                    for (const Metavision::EventCD *it = std::addressof(event_buffer_[0]);
-                         it != std::addressof(event_buffer_[event_buffer_.size()]); ++it, ++buffer_msg_it) {
-                        prophesee_event_msgs::Event &event = *buffer_msg_it;
-                        event.x                            = it->x;
-                        event.y                            = it->y;
-                        event.polarity                     = it->p;
-                        event.ts.fromNSec(start_timestamp_.toNSec() + (it->t * 1000.00));
-                    }
+            if ((event_buffer_current_time_ - event_buffer_start_time_) >= event_delta_t_) {
+                /** Create the message **/
+                prophesee_event_msgs::EventArray event_buffer_msg;
 
-                    // Publish the message
-                    pub_cd_events_.publish(event_buffer_msg);
+                // Sensor geometry in header of the message
+                event_buffer_msg.header.stamp = event_buffer_current_time_;
+                event_buffer_msg.height = camera_.geometry().height();
+                event_buffer_msg.width = camera_.geometry().width();
 
-                    // Clean the buffer for the next iteration
-                    event_buffer_.clear();
+                /** Set the buffer size for the msg **/
+                event_buffer_msg.events.resize(event_buffer_.size());
 
-                    ROS_DEBUG("CD data available, buffer size: %d at time: %lui",
-                              static_cast<int>(event_buffer_msg.events.size()), event_buffer_msg.header.stamp.toNSec());
+                // Copy the events to the ros buffer format
+                auto buffer_msg_it = event_buffer_msg.events.begin();
+                for (const Metavision::EventCD* it = std::addressof(event_buffer_[0]);
+                    it != std::addressof(event_buffer_[event_buffer_.size()]); ++it, ++buffer_msg_it) {
+                    prophesee_event_msgs::Event& event = *buffer_msg_it;
+                    event.x = it->x;
+                    event.y = it->y;
+                    event.polarity = it->p;
+                    event.ts.fromNSec(start_timestamp_.toNSec() + (it->t * 1000.00));
                 }
 
-            });
-    } catch (Metavision::CameraException &e) {
+                // Publish the message
+                pub_cd_events_.publish(event_buffer_msg);
+
+                // Clean the buffer for the next iteration
+                event_buffer_.clear();
+
+                ROS_DEBUG("CD data available, buffer size: %d at time: %lui",
+                    static_cast<int>(event_buffer_msg.events.size()), event_buffer_msg.header.stamp.toNSec());
+            }
+
+                });
+    }
+    catch (Metavision::CameraException& e) {
         ROS_WARN("%s", e.what());
         publish_cd_ = false;
     }
 }
 
-int main(int argc, char **argv) {
+// bool start_record_srv_callback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res)
+// {
+//     if (record_save_path == "" || record_name == "") {
+//         res.success = false;
+//     }
+//     else {
+//         std::string path = record_save_path;
+//         if (record_save_path.endwith("/")) {
+//             path += record_name;
+//         }
+//         else {
+//             path = path + "/" + record_name;
+//         }
+//         res.success = cam.start_recording(path);
+//     }
+//     return true;
+// }
+// bool stop_record_srv_callback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res)
+// {
+//     if (!param_loaded)
+//     {
+//         res.success = false;
+//     }
+//     else
+//     {
+//         res.success = cam.stop_recording(package_path + "/" + events_record_name_save);
+//     }
+//     return true;
+// }
+
+
+int main(int argc, char** argv) {
     ros::init(argc, argv, "prophesee_ros_publisher");
+
+
 
     PropheseeWrapperPublisher wp;
     wp.startPublishing();

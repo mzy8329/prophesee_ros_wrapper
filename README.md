@@ -2,6 +2,16 @@
 
 ![Event-based vision by Prophesee](event-based_vision_PROPHESEE.png)
 
+> zongyuma 03.19 2025 添加了录制.raw文件的功能
+
+ **更改prophesee_viewer.launch 文件中的“file_record_path”和“file_name”来自定义文件输出路径。**
+
+ **call “PropheseeWrapperPublisher/start_record_origin” to start.**
+
+ **call "PropheseeWrapperPublisher/stop_record_origin" to stop.**
+
+> 以下为原README
+
 The aim of this metapackage is wrapping event-based data from [Prophesee sensors](https://www.prophesee.ai/event-based-sensor-packaged) using [OpenEB](https://github.com/prophesee-ai/openeb) software and publishing the event-based data to ROS.
 
 This metapackage contains ROS wrapper (prophesee_ros_driver) and messages (prophesee_event_msgs) for Prophesee sensors.
