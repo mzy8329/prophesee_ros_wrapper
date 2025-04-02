@@ -65,8 +65,8 @@ PropheseeWrapperPublisher::PropheseeWrapperPublisher() :
 
     nh_.getParam("file_record_path", file_record_path_);
     nh_.getParam("file_name", file_name_);
-    start_record_srv_ = nh_.advertiseService("PropheseeWrapperPublisher/start_record_origin", &PropheseeWrapperPublisher::start_record_srv_callback, this);
-    stop_record_srv_ = nh_.advertiseService("PropheseeWrapperPublisher/stop_record_origin", &PropheseeWrapperPublisher::stop_record_srv_callback, this);
+    start_record_srv_ = nh_.advertiseService("/event/start_record_origin", &PropheseeWrapperPublisher::start_record_srv_callback, this);
+    stop_record_srv_ = nh_.advertiseService("/event/stop_record_origin", &PropheseeWrapperPublisher::stop_record_srv_callback, this);
 }
 
 PropheseeWrapperPublisher::~PropheseeWrapperPublisher() {
