@@ -115,6 +115,7 @@ void PropheseeWrapperPublisher::startPublishing() {
             cam_info_msg_.header.stamp = ros::Time::now();
             pub_info_.publish(cam_info_msg_);
         }
+        ros::spinOnce();
         loop_rate.sleep();
     }
 }
@@ -230,6 +231,8 @@ int main(int argc, char** argv) {
 
     PropheseeWrapperPublisher wp;
     wp.startPublishing();
+
+
 
     ros::shutdown();
 
